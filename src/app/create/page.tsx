@@ -4,6 +4,23 @@ import { useEffect, useRef, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 
+type AgentNode = 'planner' | 'generator' | 'critic' | 'refiner' | 'done'
+
+interface AgentStatus {
+  node: AgentNode
+  message: string
+}
+
+const STATUS_PREFIX = 'data: STATUS:'
+
+const NODE_LABEL: Record<AgentNode, string> = {
+  planner: '🤔 Planning your app...',
+  generator: '⚡ Generating code...',
+  critic: '🔍 Reviewing quality...',
+  refiner: '✨ Refining...',
+  done: '✅ Done',
+}
+
 function CreatePageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -11,11 +28,14 @@ function CreatePageInner() {
 
   const [html, setHtml] = useState('')
   const [status, setStatus] = useState<'generating' | 'done' | 'error'>('generating')
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null)
+  const [refineCount, setRefineCount] = useState(0)
   const [saved, setSaved] = useState<{ id: string; title: string } | null>(null)
   const [showCode, setShowCode] = useState(false)
   const [refinePrompt, setRefinePrompt] = useState('')
   const [refining, setRefining] = useState(false)
   const htmlRef = useRef('')
+  const refineCountRef = useRef(0)
   const iframeRef = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
@@ -29,7 +49,10 @@ function CreatePageInner() {
   async function generate(p: string, existing: string | null) {
     setStatus('generating')
     setHtml('')
+    setAgentStatus(null)
+    setRefineCount(0)
     htmlRef.current = ''
+    refineCountRef.current = 0
 
     try {
       const res = await fetch('/api/stream', {
@@ -42,16 +65,53 @@ function CreatePageInner() {
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
+      let pending = ''
 
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        const chunk = decoder.decode(value, { stream: true })
-        htmlRef.current += chunk
+        pending += decoder.decode(value, { stream: true })
+
+        const lines = pending.split('\n')
+        pending = lines.pop() ?? ''
+
+        let htmlAppend = ''
+        for (const line of lines) {
+          if (line.startsWith(STATUS_PREFIX)) {
+            const body = line.slice(STATUS_PREFIX.length)
+            const colonIdx = body.indexOf(':')
+            if (colonIdx === -1) continue
+            const node = body.slice(0, colonIdx) as AgentNode
+            const message = body.slice(colonIdx + 1)
+            setAgentStatus({ node, message })
+
+            if (node === 'generator' || node === 'refiner') {
+              htmlRef.current = ''
+              htmlAppend = ''
+              setHtml('')
+              if (node === 'refiner') {
+                refineCountRef.current += 1
+                setRefineCount(refineCountRef.current)
+              }
+            }
+          } else {
+            htmlAppend += line + '\n'
+          }
+        }
+
+        if (htmlAppend) {
+          htmlRef.current += htmlAppend
+          setHtml(htmlRef.current)
+        }
+      }
+
+      if (pending && !pending.startsWith(STATUS_PREFIX)) {
+        htmlRef.current += pending
         setHtml(htmlRef.current)
       }
 
       setStatus('done')
+      setAgentStatus({ node: 'done', message: 'complete' })
       await saveApp(p, htmlRef.current)
     } catch (err) {
       console.error(err)
@@ -84,6 +144,16 @@ function CreatePageInner() {
 
   const iframeDoc = html || '<html><body style="background:#0a0a0a"></body></html>'
 
+  const statusLabel = (() => {
+    if (status === 'error') return null
+    if (status === 'done') {
+      const suffix = refineCount > 0 ? ` — ${refineCount} refinement${refineCount > 1 ? 's' : ''}` : ''
+      return `✅ Done${suffix}`
+    }
+    if (agentStatus) return NODE_LABEL[agentStatus.node]
+    return '🤔 Starting...'
+  })()
+
   return (
     <div className="h-screen flex flex-col bg-[#0a0a0a]">
       {/* Top bar */}
@@ -92,14 +162,16 @@ function CreatePageInner() {
           <Link href="/" className="text-[#555] hover:text-white transition-colors text-sm">
             ← Atoms
           </Link>
-          {status === 'generating' && (
+          {status === 'generating' && statusLabel && (
             <span className="text-xs text-purple-400 flex items-center gap-1.5">
               <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-400 animate-ping" />
-              Generating…
+              {statusLabel}
             </span>
           )}
-          {status === 'done' && saved && (
-            <span className="text-xs text-[#555]">{saved.title}</span>
+          {status === 'done' && (
+            <span className="text-xs text-[#888]">
+              {statusLabel}{saved && ` · ${saved.title}`}
+            </span>
           )}
           {status === 'error' && (
             <span className="text-xs text-red-400">Generation failed</span>
