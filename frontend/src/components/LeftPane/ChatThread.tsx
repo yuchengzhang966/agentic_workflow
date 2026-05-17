@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ThreadItem } from '../../lib/types';
+import type { Phase, ThreadItem } from '../../lib/types';
 import { AgentMessage } from './AgentMessage';
 import { HumanGate } from './HumanGate';
+import { ActivityIndicator } from './ActivityIndicator';
 import { BracketsIcon } from '../icons';
 
 interface Props {
   thread: ThreadItem[];
+  phase: Phase;
   onDecision: (gateId: string, decision: 'approve' | 'reject', feedback?: string) => void;
 }
 
-export function ChatThread({ thread, onDecision }: Props) {
+export function ChatThread({ thread, phase, onDecision }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const [showChip, setShowChip] = useState(false);
@@ -59,6 +61,8 @@ export function ChatThread({ thread, onDecision }: Props) {
           return <AgentMessage key={item.id} message={item} compact={compact} />;
         })
       )}
+
+      <ActivityIndicator phase={phase} />
 
       {showChip && (
         <button className="new-msg-chip" onClick={jumpToBottom}>

@@ -14,7 +14,7 @@ export function LeftPane({ state, onStart, onDecision, onReset }: Props) {
   return (
     <section className="left-pane" aria-label="Agent conversation">
       <PipelineIndicator state={state} />
-      <ChatThread thread={state.thread} onDecision={onDecision} />
+      <ChatThread thread={state.thread} phase={state.phase} onDecision={onDecision} />
       <Composer phase={state.phase} onStart={onStart} onReset={onReset} />
     </section>
   );

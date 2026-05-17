@@ -40,12 +40,24 @@ ENGINEER_PROMPT = (
     "You are a senior full-stack engineer. Build a COMPLETE, RUNNABLE multi-file "
     "Python/FastAPI application implementing the PRD below.\n\n"
     "Hard requirements:\n"
-    "- The app is a FastAPI backend that ALSO serves a static HTML frontend.\n"
-    "- `main.py` MUST define `app = FastAPI()` and serve an HTML UI at `GET /`.\n"
-    "- Any persistence is in-memory or a local SQLite file — NO external services, "
-    "NO env vars, NO credentials.\n"
-    "- `requirements.txt` MUST list every dependency and MUST include `fastapi` "
-    "and `uvicorn[standard]`. Keep dependencies minimal.\n"
+    "- `main.py` MUST define `app = FastAPI()`.\n"
+    "- The frontend is PLAIN STATIC HTML. Do NOT use Jinja2, `Jinja2Templates`, "
+    "`TemplateResponse`, or a `templates/` directory — that templating API "
+    "breaks on current Starlette. Put `index.html` and any CSS/JS under "
+    "`static/`.\n"
+    "- Serve the UI at `GET /` by returning `FileResponse('static/index.html')` "
+    "(`from fastapi.responses import FileResponse`). Mount assets with "
+    "`app.mount('/static', StaticFiles(directory='static'), name='static')`.\n"
+    "- In HTML, reference assets with plain absolute paths like "
+    "`/static/style.css` and `/static/app.js` — never `url_for`.\n"
+    "- The HTML frontend communicates with the backend ONLY via `fetch()` calls "
+    "to JSON endpoints. Do NOT use HTML `<form>` POST submissions.\n"
+    "- Any persistence is in-memory or a local SQLite file (`sqlite3` stdlib) — "
+    "NO external services, NO env vars, NO credentials.\n"
+    "- `requirements.txt` MUST pin EXACT versions and contain EXACTLY these two "
+    "lines, nothing else (the app needs only these — `sqlite3` is stdlib):\n"
+    "  fastapi==0.115.0\n"
+    "  uvicorn[standard]==0.31.0\n"
     "- The app MUST run with exactly: `pip install -r requirements.txt` then "
     "`uvicorn main:app`.\n\n"
     "OUTPUT FORMAT — output EXACTLY this and nothing else. No markdown fences, no "
@@ -53,9 +65,9 @@ ENGINEER_PROMPT = (
     "@@FILE: <relative/path>\n"
     "<full verbatim file content>\n"
     "@@ENDFILE@@\n\n"
-    "Always emit `main.py` and `requirements.txt`. A typical set is: main.py, "
-    "requirements.txt, static/index.html (plus optional static/app.js, "
-    "static/style.css). Keep the app small but fully functional. "
+    "Always emit `main.py` and `requirements.txt`. The expected file set is: "
+    "main.py, requirements.txt, static/index.html, static/style.css, "
+    "static/app.js. Keep the app small but fully functional. "
     "Always respond in English."
 )
 
@@ -86,6 +98,10 @@ _FILE_RE = re.compile(
     r"@@FILE:\s*(?P<path>[^\n]+)\n(?P<body>.*?)\n?@@ENDFILE@@",
     re.DOTALL,
 )
+
+# A file whose @@FILE: header has streamed in but is not yet closed by
+# @@ENDFILE@@ — used to stream the in-progress file into the Code tab live.
+_PARTIAL_FILE_RE = re.compile(r"@@FILE:\s*(?P<path>[^\n]+)\n(?P<body>.*)", re.DOTALL)
 
 
 def _strip_fences(body: str) -> str:
@@ -119,6 +135,17 @@ class FileStreamParser:
             )
             self.buffer = self.buffer[m.end():]
         return out
+
+    def partial(self) -> Optional[dict]:
+        """The file currently being written — its @@FILE: header has arrived
+        but @@ENDFILE@@ has not. Returns ``None`` when nothing is in flight."""
+        m = _PARTIAL_FILE_RE.search(self.buffer)
+        if not m:
+            return None
+        return {
+            "path": m.group("path").strip(),
+            "content": _strip_fences(m.group("body")),
+        }
 
 
 # --- cross-thread event bus --------------------------------------------------
@@ -278,6 +305,7 @@ def engineer_node(state: PipelineState, config) -> dict:
             bus.emit({"type": "file", "path": f["path"], "content": f["content"]})
             bus.emit({"type": "chunk", "node": "engineer", "text": f"\U0001F4C4 {f['path']}\n"})
 
+    last_partial_len = 0
     for chunk in model.stream(
         [SystemMessage(content=ENGINEER_PROMPT), HumanMessage(content=user_msg)]
     ):
@@ -287,6 +315,14 @@ def engineer_node(state: PipelineState, config) -> dict:
         raw_parts.append(text)
         for f in parser.feed(text):
             _add(f)
+            last_partial_len = 0
+        # Stream the in-progress file into the Code tab so the engineer phase
+        # shows continuous progress instead of long silences between files.
+        if bus:
+            p = parser.partial()
+            if p and len(p["content"]) - last_partial_len >= 100:
+                last_partial_len = len(p["content"])
+                bus.emit({"type": "file", "path": p["path"], "content": p["content"]})
 
     # Fallback: model ignored the streaming-friendly schema — parse the whole
     # output once more in case blocks were only complete at the very end.
@@ -325,6 +361,17 @@ def runner_node(state: PipelineState, config) -> dict:
     # Build/boot check: deploy() returns None when the app never responded.
     if deployment is None:
         msg = "The generated app failed to boot — it did not respond in time."
+        emit({"type": "error", "message": msg})
+        return {"runner_error": msg}
+
+    # The server process is up but the app errors on every request — a broken
+    # build, not a live preview. Report it honestly instead of a green "Live".
+    if deployment.boot_status and deployment.boot_status >= 500:
+        runner.teardown_thread(thread_id)
+        msg = (
+            f"The generated app deployed but returns HTTP {deployment.boot_status} "
+            "on every request — it has a runtime error."
+        )
         emit({"type": "error", "message": msg})
         return {"runner_error": msg}
 

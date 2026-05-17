@@ -38,6 +38,7 @@ class Deployment:
     def __init__(self, url: str, teardown: Callable[[], None], mode: str) -> None:
         self.url = url
         self.mode = mode
+        self.boot_status: Optional[int] = None
         self._teardown = teardown
         self._torn = False
 
@@ -95,18 +96,23 @@ def runner_mode() -> str:
 
 # --- boot check --------------------------------------------------------------
 
-def _wait_for_boot(url: str, timeout: int = BOOT_TIMEOUT) -> bool:
-    """Poll ``url`` until the app responds. Any HTTP status counts as booted —
-    a 404/500 still means the server process is up; only a refused/failed
-    connection means it is not."""
+def _wait_for_boot(url: str, timeout: int = BOOT_TIMEOUT) -> Optional[int]:
+    """Poll ``url`` until the app's server responds. Returns the HTTP status of
+    the last response, or ``None`` if no connection was ever accepted. A 5xx
+    status means the server process is up but the app errors on every request —
+    a broken build, not a healthy deploy."""
     deadline = time.time() + timeout
+    last_status: Optional[int] = None
     while time.time() < deadline:
         try:
-            httpx.get(url, timeout=5, follow_redirects=True)
-            return True
+            resp = httpx.get(url, timeout=5, follow_redirects=True)
+            last_status = resp.status_code
+            if last_status < 500:
+                return last_status
         except Exception:  # noqa: BLE001 — connection not ready yet
-            time.sleep(2)
-    return False
+            pass
+        time.sleep(2)
+    return last_status
 
 
 def _free_port() -> int:
@@ -216,9 +222,11 @@ def deploy(thread_id: str, files: list[dict], emit: EmitFn) -> Optional[Deployme
     )
 
     emit({"type": "deploy_status", "message": "Waiting for the app to boot…"})
-    if not _wait_for_boot(deployment.url):
+    status = _wait_for_boot(deployment.url)
+    if status is None:
         deployment.teardown()
         return None
 
+    deployment.boot_status = status
     _register(thread_id, deployment)
     return deployment
