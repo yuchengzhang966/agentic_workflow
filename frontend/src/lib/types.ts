@@ -50,10 +50,8 @@ export interface PipelineState {
   thread: ThreadItem[];
   files: FileEntry[];
   selectedFile: string | null;
-  previewUrl: string | null;
-  /** true when previewUrl points at a sandbox that has likely been torn down
-   * (e.g. a session restored from localStorage after the ~10-min timeout) */
-  previewExpired: boolean;
+  /** the generated app's self-contained HTML, rendered in the preview iframe */
+  previewHtml: string | null;
   score: number | null;
   issues: string[];
   error: string | null;
@@ -66,7 +64,7 @@ export type PipelineEvent =
   | { type: 'status'; node: string }
   | { type: 'chunk'; node: string; text: string }
   | { type: 'file'; path: string; content: string }
-  | { type: 'preview'; url: string }
+  | { type: 'preview'; html: string }
   | { type: 'deploy_status'; message?: string; status?: string }
   | { type: 'interrupt'; prd: string }
   | { type: 'score'; score: number; issues?: string[]; feedback?: string }

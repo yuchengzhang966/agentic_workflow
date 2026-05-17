@@ -9,19 +9,13 @@ interface Props {
 }
 
 export function RightPane({ state, onReset, onFileSelect }: Props) {
-  const { phase, previewUrl, previewExpired, error, files, selectedFile, rightTab } = state;
+  const { phase, previewHtml, error, files, selectedFile, rightTab } = state;
 
   return (
     <section className="right-pane" aria-label="Preview and code">
       <div className="right-pane__content">
         {rightTab === 'preview' ? (
-          <PreviewTab
-            phase={phase}
-            previewUrl={previewUrl}
-            previewExpired={previewExpired}
-            error={error}
-            onReset={onReset}
-          />
+          <PreviewTab phase={phase} previewHtml={previewHtml} error={error} onReset={onReset} />
         ) : (
           <CodeTab files={files} selectedFile={selectedFile} onFileSelect={onFileSelect} />
         )}

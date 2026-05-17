@@ -5,44 +5,37 @@ import { AlertIcon, BracketsIcon, LoaderIcon } from '../icons';
 
 interface Props {
   phase: Phase;
-  previewUrl: string | null;
-  previewExpired: boolean;
+  previewHtml: string | null;
   error: string | null;
   onReset: () => void;
 }
 
-type PreviewState = 'idle' | 'deploying' | 'live' | 'error' | 'expired';
+type PreviewState = 'idle' | 'deploying' | 'live' | 'error';
 
-function resolveState(
-  phase: Phase,
-  previewUrl: string | null,
-  previewExpired: boolean,
-): PreviewState {
+function resolveState(phase: Phase, previewHtml: string | null): PreviewState {
   if (phase === 'error') return 'error';
-  if (previewExpired) return 'expired';
-  if (previewUrl) return 'live';
+  if (previewHtml) return 'live';
   if (phase === 'deploying') return 'deploying';
   return 'idle';
 }
 
-export function PreviewTab({ phase, previewUrl, previewExpired, error, onReset }: Props) {
-  const view = resolveState(phase, previewUrl, previewExpired);
+export function PreviewTab({ phase, previewHtml, error, onReset }: Props) {
+  const view = resolveState(phase, previewHtml);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!previewUrl) setLoaded(false);
-  }, [previewUrl]);
+    if (!previewHtml) setLoaded(false);
+  }, [previewHtml]);
 
   return (
     <div className="tab-content">
-      <BrowserChrome url={view === 'expired' ? null : previewUrl} />
+      <BrowserChrome url={previewHtml ? 'localhost — your app' : null} />
       <div className={`preview ${view === 'error' ? 'preview__placeholder--error' : ''}`}>
-        {view === 'live' && previewUrl && (
+        {view === 'live' && previewHtml && (
           <iframe
             className={`preview__iframe ${loaded ? 'preview__iframe--loaded' : ''}`}
-            src={previewUrl}
+            srcDoc={previewHtml}
             title="App preview"
-            allow="cross-origin-isolated"
             onLoad={() => setLoaded(true)}
           />
         )}
@@ -57,23 +50,7 @@ export function PreviewTab({ phase, previewUrl, previewExpired, error, onReset }
         {view === 'deploying' && (
           <div className="preview__placeholder">
             <LoaderIcon size={32} color="var(--accent-amber)" className="spinner" />
-            <span className="preview__ph-label">Deploying your app…</span>
-            <span className="preview__ph-sublabel">pip install + uvicorn starting</span>
-          </div>
-        )}
-
-        {view === 'expired' && (
-          <div className="preview__placeholder">
-            <BracketsIcon size={48} color="var(--text-muted)" />
-            <span className="preview__ph-label">Preview sandbox closed</span>
-            <span className="preview__ph-sublabel">
-              Live previews run in a temporary sandbox that shuts down after
-              ~10 minutes. Your generated code is saved in the Code tab — press
-              Reset to build and preview again.
-            </span>
-            <button className="ghost-btn" onClick={onReset}>
-              Reset
-            </button>
+            <span className="preview__ph-label">Rendering your app…</span>
           </div>
         )}
 
@@ -81,7 +58,7 @@ export function PreviewTab({ phase, previewUrl, previewExpired, error, onReset }
           <div className="preview__placeholder preview__placeholder--error">
             <AlertIcon size={40} color="var(--accent-red)" />
             <span className="preview__error-msg">
-              {error ?? 'Something went wrong while deploying your app.'}
+              {error ?? 'Something went wrong while building your app.'}
             </span>
             <button className="ghost-btn" onClick={onReset}>
               Reset

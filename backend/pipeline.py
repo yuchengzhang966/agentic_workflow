@@ -1,9 +1,9 @@
 """LangGraph pipeline: researcher → human_gate → engineer → runner → reviewer.
 
-The engineer node emits a multi-file Python/FastAPI project; the runner node
-deploys it to an e2b sandbox (or a local subprocess in dev) and obtains a live
-preview URL. No score<8 re-engineer loop (dropped for v1 per the PRD) — the
-reviewer scores the generated file set once, then the pipeline ends.
+The engineer node emits a self-contained client-side `index.html`; the runner
+node hands that HTML to the frontend, which renders it directly in the browser
+preview (no server or sandbox). No score<8 re-engineer loop — the reviewer
+scores the generated app once, then the pipeline ends.
 
 Sync graph execution runs in a worker thread. Nodes emit events to an
 asyncio.Queue via loop.call_soon_threadsafe so the FastAPI handler can stream
@@ -25,8 +25,6 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
-import runner
-
 ZHIPU_BASE_URL = "https://api.z.ai/api/paas/v4"
 MODEL_NAME = "glm-4.5-flash"
 
@@ -37,38 +35,25 @@ RESEARCHER_PROMPT = (
 )
 
 ENGINEER_PROMPT = (
-    "You are a senior full-stack engineer. Build a COMPLETE, RUNNABLE multi-file "
-    "Python/FastAPI application implementing the PRD below.\n\n"
+    "You are a senior front-end engineer. Build a COMPLETE, RUNNABLE web "
+    "application implementing the PRD below, as a SINGLE self-contained HTML "
+    "file.\n\n"
     "Hard requirements:\n"
-    "- `main.py` MUST define `app = FastAPI()`.\n"
-    "- The frontend is PLAIN STATIC HTML. Do NOT use Jinja2, `Jinja2Templates`, "
-    "`TemplateResponse`, or a `templates/` directory — that templating API "
-    "breaks on current Starlette. Put `index.html` and any CSS/JS under "
-    "`static/`.\n"
-    "- Serve the UI at `GET /` by returning `FileResponse('static/index.html')` "
-    "(`from fastapi.responses import FileResponse`). Mount assets with "
-    "`app.mount('/static', StaticFiles(directory='static'), name='static')`.\n"
-    "- In HTML, reference assets with plain absolute paths like "
-    "`/static/style.css` and `/static/app.js` — never `url_for`.\n"
-    "- The HTML frontend communicates with the backend ONLY via `fetch()` calls "
-    "to JSON endpoints. Do NOT use HTML `<form>` POST submissions.\n"
-    "- Any persistence is in-memory or a local SQLite file (`sqlite3` stdlib) — "
-    "NO external services, NO env vars, NO credentials.\n"
-    "- `requirements.txt` MUST pin EXACT versions and contain EXACTLY these two "
-    "lines, nothing else (the app needs only these — `sqlite3` is stdlib):\n"
-    "  fastapi==0.115.0\n"
-    "  uvicorn[standard]==0.31.0\n"
-    "- The app MUST run with exactly: `pip install -r requirements.txt` then "
-    "`uvicorn main:app`.\n\n"
-    "OUTPUT FORMAT — output EXACTLY this and nothing else. No markdown fences, no "
-    "prose, no commentary. One block per file:\n"
-    "@@FILE: <relative/path>\n"
+    "- Output EXACTLY ONE file named `index.html`.\n"
+    "- It MUST be fully self-contained: all CSS inside one `<style>` tag and "
+    "all JavaScript inside one `<script>` tag, inline in the HTML. NO external "
+    "files, NO CDN links, NO frameworks — plain HTML, CSS and vanilla JS only.\n"
+    "- The app runs ENTIRELY in the browser. There is NO backend and NO "
+    "network. Do NOT use `fetch`, `XMLHttpRequest`, or any server call.\n"
+    "- Persist data with `localStorage` so it survives a page reload.\n"
+    "- The app MUST be genuinely functional and interactive — real working "
+    "features, not a static mockup.\n\n"
+    "OUTPUT FORMAT — output EXACTLY this and nothing else. No markdown fences, "
+    "no prose, no commentary:\n"
+    "@@FILE: index.html\n"
     "<full verbatim file content>\n"
     "@@ENDFILE@@\n\n"
-    "Always emit `main.py` and `requirements.txt`. The expected file set is: "
-    "main.py, requirements.txt, static/index.html, static/style.css, "
-    "static/app.js. Keep the app small but fully functional. "
-    "Always respond in English."
+    "Keep the app focused but polished. Always respond in English."
 )
 
 REVIEWER_PROMPT = (
@@ -86,7 +71,6 @@ class PipelineState(TypedDict, total=False):
     human_decision: Optional[str]
     human_feedback: Optional[str]
     files: list[dict]
-    preview_url: Optional[str]
     runner_error: Optional[str]
     review_score: int
     review_issues: list[str]
@@ -345,39 +329,22 @@ def runner_node(state: PipelineState, config) -> dict:
             bus.emit(event)
 
     files = state.get("files") or []
-    paths = {f["path"] for f in files}
-    if "main.py" not in paths or "requirements.txt" not in paths:
-        msg = "Engineer output incomplete — missing main.py or requirements.txt."
+    html = next(
+        (f["content"] for f in files if f["path"].strip().lower().endswith("index.html")),
+        None,
+    )
+    if not html:
+        msg = "Engineer output incomplete — no index.html was produced."
         emit({"type": "error", "message": msg})
         return {"runner_error": msg}
 
-    try:
-        deployment = runner.deploy(thread_id, files, emit)
-    except Exception as err:  # noqa: BLE001
-        msg = f"Deployment failed: {err}" if str(err) else "Deployment failed."
-        emit({"type": "error", "message": msg})
-        return {"runner_error": msg}
-
-    # Build/boot check: deploy() returns None when the app never responded.
-    if deployment is None:
-        msg = "The generated app failed to boot — it did not respond in time."
-        emit({"type": "error", "message": msg})
-        return {"runner_error": msg}
-
-    # The server process is up but the app errors on every request — a broken
-    # build, not a live preview. Report it honestly instead of a green "Live".
-    if deployment.boot_status and deployment.boot_status >= 500:
-        runner.teardown_thread(thread_id)
-        msg = (
-            f"The generated app deployed but returns HTTP {deployment.boot_status} "
-            "on every request — it has a runtime error."
-        )
-        emit({"type": "error", "message": msg})
-        return {"runner_error": msg}
-
-    emit({"type": "preview", "url": deployment.url})
+    # The generated app is a self-contained client-side page — hand the HTML to
+    # the frontend, which renders it straight into the browser preview. No
+    # server, no sandbox, nothing to boot or expire.
+    emit({"type": "deploy_status", "message": "Rendering preview…"})
+    emit({"type": "preview", "html": html})
     emit({"type": "deploy_status", "message": "Live"})
-    return {"preview_url": deployment.url}
+    return {}
 
 
 def reviewer_node(state: PipelineState, config) -> dict:
