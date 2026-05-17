@@ -31,6 +31,9 @@ const initialState: PipelineState = {
 
 /** localStorage key for the persisted workspace — survives a browser refresh. */
 const STORAGE_KEY = 'atoms-pipeline-state';
+/** Bump when PipelineState's shape changes — a blob written by an older app
+ * version is then discarded on load instead of restoring incompatible data. */
+const STORAGE_VERSION = 2;
 
 /** Map a backend node name onto a chat agent identity. */
 function nodeToAgent(node: string): AgentId {
@@ -240,8 +243,10 @@ function loadPersisted(): PipelineState | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    const saved = JSON.parse(raw) as PipelineState;
-    return { ...saved, thread: finalizeStreaming(saved.thread) };
+    const parsed = JSON.parse(raw) as { v?: number; state?: PipelineState };
+    // discard a blob written by an older, incompatible app version
+    if (parsed.v !== STORAGE_VERSION || !parsed.state) return null;
+    return { ...parsed.state, thread: finalizeStreaming(parsed.state.thread) };
   } catch {
     return null;
   }
@@ -260,7 +265,10 @@ export function usePipeline() {
     if (MOCK || FIXTURE) return;
     const id = setTimeout(() => {
       try {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        window.localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({ v: STORAGE_VERSION, state }),
+        );
       } catch {
         // storage full or unavailable — non-fatal
       }
