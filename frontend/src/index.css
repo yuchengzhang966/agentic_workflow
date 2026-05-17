@@ -168,6 +168,14 @@ body {
   background: var(--bg-base);
   min-height: 0;
 }
+/* fills the right pane so the tab content (code viewer / preview) is height-
+   bounded and can scroll, instead of growing to its content height */
+.right-pane__content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 /* draggable divider between the two panes */
 .resize-handle {
   width: 1px;
