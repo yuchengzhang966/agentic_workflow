@@ -1,9 +1,13 @@
-"""LangGraph pipeline: researcher → human_gate → engineer → reviewer (loop if score < 8).
+"""LangGraph pipeline: researcher → human_gate → engineer → runner → reviewer.
 
-Sync graph execution in a worker thread. Nodes emit events to an asyncio.Queue
-via loop.call_soon_threadsafe so the FastAPI handler can stream SSE without
-blocking the event loop. This sidesteps langgraph's Python-3.11 requirement
-for async-context interrupt() calls.
+The engineer node emits a multi-file Python/FastAPI project; the runner node
+deploys it to an e2b sandbox (or a local subprocess in dev) and obtains a live
+preview URL. No score<8 re-engineer loop (dropped for v1 per the PRD) — the
+reviewer scores the generated file set once, then the pipeline ends.
+
+Sync graph execution runs in a worker thread. Nodes emit events to an
+asyncio.Queue via loop.call_soon_threadsafe so the FastAPI handler can stream
+SSE without blocking the event loop.
 """
 from __future__ import annotations
 
@@ -20,6 +24,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
+import runner
+
 ZHIPU_BASE_URL = "https://api.z.ai/api/paas/v4"
 MODEL_NAME = "glm-5.1"
 
@@ -30,12 +36,32 @@ RESEARCHER_PROMPT = (
 )
 
 ENGINEER_PROMPT = (
-    "You are a senior frontend engineer. Build a self-contained single-file HTML app implementing the PRD below. "
-    "Use vanilla JS and inline CSS. Output ONLY the complete HTML file, nothing else. Always respond in English."
+    "You are a senior full-stack engineer. Build a COMPLETE, RUNNABLE multi-file "
+    "Python/FastAPI application implementing the PRD below.\n\n"
+    "Hard requirements:\n"
+    "- The app is a FastAPI backend that ALSO serves a static HTML frontend.\n"
+    "- `main.py` MUST define `app = FastAPI()` and serve an HTML UI at `GET /`.\n"
+    "- Any persistence is in-memory or a local SQLite file — NO external services, "
+    "NO env vars, NO credentials.\n"
+    "- `requirements.txt` MUST list every dependency and MUST include `fastapi` "
+    "and `uvicorn[standard]`. Keep dependencies minimal.\n"
+    "- The app MUST run with exactly: `pip install -r requirements.txt` then "
+    "`uvicorn main:app`.\n\n"
+    "OUTPUT FORMAT — output EXACTLY this and nothing else. No markdown fences, no "
+    "prose, no commentary. One block per file:\n"
+    "@@FILE: <relative/path>\n"
+    "<full verbatim file content>\n"
+    "@@ENDFILE@@\n\n"
+    "Always emit `main.py` and `requirements.txt`. A typical set is: main.py, "
+    "requirements.txt, static/index.html (plus optional static/app.js, "
+    "static/style.css). Keep the app small but fully functional. "
+    "Always respond in English."
 )
 
 REVIEWER_PROMPT = (
-    "You are a code reviewer. Review the HTML app against the original idea and PRD. "
+    "You are a senior code reviewer. Review the generated multi-file FastAPI "
+    "project against the original idea and PRD. Judge correctness, whether it "
+    "implements the PRD, and obvious bugs. "
     'Return ONLY a JSON object: { "score": <1-10 integer>, "issues": [<string>, ...] }. '
     "Be concise. Always respond in English."
 )
@@ -46,11 +72,55 @@ class PipelineState(TypedDict, total=False):
     prd: str
     human_decision: Optional[str]
     human_feedback: Optional[str]
-    code: str
+    files: list[dict]
+    preview_url: Optional[str]
+    runner_error: Optional[str]
     review_score: int
     review_issues: list[str]
-    attempts: int
 
+
+# --- engineer output parsing -------------------------------------------------
+
+_FILE_RE = re.compile(
+    r"@@FILE:\s*(?P<path>[^\n]+)\n(?P<body>.*?)\n?@@ENDFILE@@",
+    re.DOTALL,
+)
+
+
+def _strip_fences(body: str) -> str:
+    """Drop a stray leading ```lang / trailing ``` line if the model added one."""
+    lines = body.split("\n")
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines)
+
+
+class FileStreamParser:
+    """Incremental parser: feed streamed text, get complete files back."""
+
+    def __init__(self) -> None:
+        self.buffer = ""
+
+    def feed(self, text: str) -> list[dict]:
+        self.buffer += text
+        out: list[dict] = []
+        while True:
+            m = _FILE_RE.search(self.buffer)
+            if not m:
+                break
+            out.append(
+                {
+                    "path": m.group("path").strip(),
+                    "content": _strip_fences(m.group("body")),
+                }
+            )
+            self.buffer = self.buffer[m.end():]
+        return out
+
+
+# --- cross-thread event bus --------------------------------------------------
 
 class Bus:
     """Cross-thread event bus: worker thread emits, asyncio consumer reads."""
@@ -138,6 +208,8 @@ def _thread_id_from_config(config) -> str:
     return (config or {}).get("configurable", {}).get("thread_id", "")
 
 
+# --- nodes -------------------------------------------------------------------
+
 def researcher_node(state: PipelineState, config) -> dict:
     thread_id = _thread_id_from_config(config)
     bus = _get_bus(thread_id)
@@ -176,31 +248,75 @@ def engineer_node(state: PipelineState, config) -> dict:
     if bus:
         bus.emit({"type": "status", "node": "engineer"})
 
-    attempt = state.get("attempts", 0) + 1
-    if attempt > 1 and bus:
-        bus.emit({"type": "loop", "attempt": attempt})
-
-    user_msg = f"PRD:\n{state.get('prd', '')}\n\nBuild the HTML app now."
+    user_msg = f"PRD:\n{state.get('prd', '')}\n\nBuild the application now."
     feedback = state.get("human_feedback")
     if feedback:
         user_msg += f"\n\nIncorporate this feedback: {feedback}"
-    prior_issues = state.get("review_issues") or []
-    if prior_issues:
-        joined = "\n".join(f"{i+1}. {x}" for i, x in enumerate(prior_issues))
-        user_msg += f"\n\nFix these issues from code review:\n{joined}"
 
-    model = _make_model(8192)
-    code_parts: list[str] = []
+    model = _make_model(16000)
+    parser = FileStreamParser()
+    files: list[dict] = []
+    raw_parts: list[str] = []
+
+    def _add(f: dict) -> None:
+        files.append(f)
+        if bus:
+            bus.emit({"type": "file", "path": f["path"], "content": f["content"]})
+            bus.emit({"type": "chunk", "node": "engineer", "text": f"\U0001F4C4 {f['path']}\n"})
+
     for chunk in model.stream(
         [SystemMessage(content=ENGINEER_PROMPT), HumanMessage(content=user_msg)]
     ):
         text = _extract_text(chunk.content)
-        if text:
-            code_parts.append(text)
-            if bus:
-                bus.emit({"type": "chunk", "node": "engineer", "text": text})
+        if not text:
+            continue
+        raw_parts.append(text)
+        for f in parser.feed(text):
+            _add(f)
 
-    return {"code": "".join(code_parts).strip(), "attempts": attempt}
+    # Fallback: model ignored the streaming-friendly schema — parse the whole
+    # output once more in case blocks were only complete at the very end.
+    if not files:
+        full = "".join(raw_parts)
+        for m in _FILE_RE.finditer(full):
+            _add({"path": m.group("path").strip(), "content": _strip_fences(m.group("body"))})
+
+    return {"files": files}
+
+
+def runner_node(state: PipelineState, config) -> dict:
+    thread_id = _thread_id_from_config(config)
+    bus = _get_bus(thread_id)
+    if bus:
+        bus.emit({"type": "status", "node": "runner"})
+
+    def emit(event: dict) -> None:
+        if bus:
+            bus.emit(event)
+
+    files = state.get("files") or []
+    paths = {f["path"] for f in files}
+    if "main.py" not in paths or "requirements.txt" not in paths:
+        msg = "Engineer output incomplete — missing main.py or requirements.txt."
+        emit({"type": "error", "message": msg})
+        return {"runner_error": msg}
+
+    try:
+        deployment = runner.deploy(thread_id, files, emit)
+    except Exception as err:  # noqa: BLE001
+        msg = f"Deployment failed: {err}" if str(err) else "Deployment failed."
+        emit({"type": "error", "message": msg})
+        return {"runner_error": msg}
+
+    # Build/boot check: deploy() returns None when the app never responded.
+    if deployment is None:
+        msg = "The generated app failed to boot — it did not respond in time."
+        emit({"type": "error", "message": msg})
+        return {"runner_error": msg}
+
+    emit({"type": "preview", "url": deployment.url})
+    emit({"type": "deploy_status", "message": "Live"})
+    return {"preview_url": deployment.url}
 
 
 def reviewer_node(state: PipelineState, config) -> dict:
@@ -208,8 +324,13 @@ def reviewer_node(state: PipelineState, config) -> dict:
     bus = _get_bus(thread_id)
     if bus:
         bus.emit({"type": "status", "node": "reviewer"})
+        bus.emit({"type": "chunk", "node": "reviewer", "text": "Reviewing the generated project…\n"})
 
-    model = _make_model(512)
+    files = state.get("files") or []
+    files_blob = "\n\n".join(f"=== {f['path']} ===\n{f['content']}" for f in files)
+    # Larger budget than the old single-HTML reviewer: a multi-file project plus
+    # any model preamble can overrun 512 tokens and truncate the JSON verdict.
+    model = _make_model(1024)
     res = model.invoke(
         [
             SystemMessage(content=REVIEWER_PROMPT),
@@ -217,7 +338,7 @@ def reviewer_node(state: PipelineState, config) -> dict:
                 content=(
                     f"Original idea: {state.get('idea', '')}\n\n"
                     f"PRD:\n{state.get('prd', '')}\n\n"
-                    f"App HTML:\n{state.get('code', '')}"
+                    f"Generated project ({len(files)} files):\n{files_blob}"
                 )
             ),
         ]
@@ -225,14 +346,20 @@ def reviewer_node(state: PipelineState, config) -> dict:
     raw = _extract_text(res.content) or (res.content if isinstance(res.content, str) else json.dumps(res.content))
     score, issues = _parse_review(raw)
     if bus:
-        bus.emit({"type": "score", "score": score, "issues": issues})
+        bus.emit(
+            {
+                "type": "score",
+                "score": score,
+                "issues": issues,
+                "feedback": "; ".join(issues) if issues else "No blocking issues found.",
+            }
+        )
     return {"review_score": score, "review_issues": issues}
 
 
-def _should_loop(state: PipelineState):
-    if state.get("review_score", 0) >= 8 or state.get("attempts", 0) >= 2:
-        return END
-    return "engineer"
+def _after_runner(state: PipelineState):
+    """Skip the reviewer when the app never deployed — the error is already out."""
+    return END if state.get("runner_error") else "reviewer"
 
 
 def _build_graph():
@@ -240,12 +367,14 @@ def _build_graph():
     builder.add_node("researcher", researcher_node)
     builder.add_node("human_gate", human_gate_node)
     builder.add_node("engineer", engineer_node)
+    builder.add_node("runner", runner_node)
     builder.add_node("reviewer", reviewer_node)
     builder.add_edge(START, "researcher")
     builder.add_edge("researcher", "human_gate")
     builder.add_edge("human_gate", "engineer")
-    builder.add_edge("engineer", "reviewer")
-    builder.add_conditional_edges("reviewer", _should_loop, {"engineer": "engineer", END: END})
+    builder.add_edge("engineer", "runner")
+    builder.add_conditional_edges("runner", _after_runner, {"reviewer": "reviewer", END: END})
+    builder.add_edge("reviewer", END)
     return builder.compile(checkpointer=_checkpointer)
 
 
@@ -276,13 +405,16 @@ async def run_pipeline(
                     prd = value.get("prd", "") if isinstance(value, dict) else ""
                     bus.emit({"type": "interrupt", "prd": prd})
                 return
+            if isinstance(final_state, dict) and final_state.get("runner_error"):
+                # error event already emitted by runner_node; just close out.
+                return
             bus.emit(
                 {
                     "type": "done",
-                    "code": final_state.get("code", ""),
+                    "files": final_state.get("files", []),
+                    "preview_url": final_state.get("preview_url"),
                     "score": final_state.get("review_score", 0),
                     "issues": final_state.get("review_issues", []),
-                    "attempts": final_state.get("attempts", 0),
                 }
             )
         except Exception as err:  # noqa: BLE001
@@ -300,6 +432,6 @@ async def run_pipeline(
                 break
             yield event
     finally:
-        # Drain to avoid leaking the thread (it will finish on its own once invoke returns).
+        # Drain to avoid leaking the thread (it finishes on its own once invoke returns).
         await asyncio.get_running_loop().run_in_executor(None, worker_thread.join, 30)
         _clear_bus(thread_id)

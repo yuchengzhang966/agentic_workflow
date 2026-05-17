@@ -15,6 +15,7 @@ load_dotenv(".env")
 load_dotenv(".env.local")
 
 from pipeline import run_pipeline  # noqa: E402
+from runner import runner_mode, teardown_all, teardown_thread  # noqa: E402
 
 app = FastAPI(title="Atoms Demo Pipeline")
 
@@ -38,6 +39,10 @@ class ResumeRequest(BaseModel):
     feedback: Optional[str] = None
 
 
+class ResetRequest(BaseModel):
+    thread_id: str
+
+
 def _wrap(event: dict, start_time: float) -> dict:
     # sse-starlette accepts {"data": str} dict; we encode the payload as JSON.
     # If this is the "done" event, inject elapsed seconds.
@@ -48,7 +53,19 @@ def _wrap(event: dict, start_time: float) -> dict:
 
 @app.get("/health")
 async def health():
-    return {"ok": True}
+    return {"ok": True, "runner_mode": runner_mode()}
+
+
+@app.on_event("shutdown")
+async def _shutdown():
+    teardown_all()
+
+
+@app.post("/pipeline/reset")
+async def pipeline_reset(req: ResetRequest):
+    """Tear down the sandbox for a thread (Reset button in the UI)."""
+    torn = teardown_thread(req.thread_id)
+    return {"ok": True, "torn_down": torn}
 
 
 @app.post("/pipeline/start")
