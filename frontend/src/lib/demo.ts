@@ -1,0 +1,321 @@
+/**
+ * Demo data — drives the UI without a live backend.
+ *  - `getFixture(name)` returns a frozen PipelineState for a named UI state
+ *    (used by `?state=<name>` for visual review of every screen).
+ *  - `mockStart` / `mockResume` replay a scripted SSE stream (used by `?mock=1`).
+ */
+import type { ChatMessage, FileEntry, GateItem, PipelineEvent, PipelineState } from './types';
+
+// ── sample generated project ──────────────────────────────────────────────
+const MAIN_PY = `from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+app = FastAPI(title="Todo API")
+
+# in-memory store — fine for a single-run sandbox demo
+todos: list[dict] = []
+
+
+class Todo(BaseModel):
+    title: str
+    done: bool = False
+
+
+@app.get("/api/todos")
+def list_todos():
+    return todos
+
+
+@app.post("/api/todos")
+def add_todo(todo: Todo):
+    item = {"id": len(todos) + 1, **todo.dict()}
+    todos.append(item)
+    return item
+
+
+# serve the static frontend at the root
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
+`;
+
+const REQUIREMENTS = `fastapi==0.115.0
+uvicorn[standard]==0.30.6
+pydantic==2.9.2
+`;
+
+const INDEX_HTML = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Todo</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main id="app"></main>
+    <script src="/app.js"></script>
+  </body>
+</html>
+`;
+
+const APP_JS = `async function load() {
+  const res = await fetch("/api/todos");
+  const todos = await res.json();
+  render(todos);
+}
+
+async function add(title) {
+  await fetch("/api/todos", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  load();
+}
+
+load();
+`;
+
+const SAMPLE_FILES: { path: string; content: string }[] = [
+  { path: 'main.py', content: MAIN_PY },
+  { path: 'requirements.txt', content: REQUIREMENTS },
+  { path: 'static/index.html', content: INDEX_HTML },
+  { path: 'static/app.js', content: APP_JS },
+];
+
+const SAMPLE_PRD = `# PRD — Todo App
+
+## Goal
+A working full-stack todo app: FastAPI REST API + static frontend.
+
+## In scope
+- GET/POST /api/todos
+- In-memory persistence for the sandbox run
+- Minimal static UI that calls the API
+
+## Acceptance
+- The API responds 200 and persists posted items
+- The frontend loads and is interactive`;
+
+const RESEARCHER_TEXT = `Analyzing your idea — a todo app with a real persistence API.
+
+A todo app is a saturated category, but the ask here is a working full-stack reference build. I'm recommending a minimal FastAPI service with an in-memory store, a REST API at \`/api/todos\`, and a small static frontend served from the same app.
+
+Drafting the PRD now so you can review the scope before the engineer starts.`;
+
+const ENGINEER_TEXT = `Building the FastAPI project. Starting with the API layer, then the static frontend.
+
+\`main.py\` exposes \`GET\` / \`POST /api/todos\` and mounts \`static/\` for the UI.`;
+
+const REVIEWER_TEXT = `Reviewing the running app in the sandbox.
+
+✓ \`GET /api/todos\` returns 200
+✓ \`POST /api/todos\` persists and echoes the new item
+✓ Static frontend loads and calls the API
+
+Clean separation, sensible defaults. One minor gap: empty titles aren't rejected.
+
+Score: 8/10`;
+
+const DEPLOY_TEXT = 'Deploying to sandbox… pip install + uvicorn starting.';
+const PREVIEW_URL =
+  'https://placehold.co/1280x900/0d1117/d29922/png?text=Todo+App+%E2%80%94+running+in+e2b';
+
+// ── fixture builders ──────────────────────────────────────────────────────
+const T0 = 1_747_500_000_000; // fixed base so screenshots are deterministic
+
+function msg(
+  agent: ChatMessage['agent'],
+  text: string,
+  streaming: boolean,
+  offset: number,
+): ChatMessage {
+  return { id: `fx-${agent}-${offset}`, kind: 'message', agent, text, ts: T0 + offset, streaming };
+}
+
+function gate(state: GateItem['state'], offset: number): GateItem {
+  return {
+    id: 'fx-gate',
+    kind: 'gate',
+    title: 'PRD Review',
+    description:
+      'The researcher has completed the PRD. Review it before the engineer begins building.',
+    prd: SAMPLE_PRD,
+    state,
+    ts: T0 + offset,
+    decidedAt: state === 'awaiting' ? null : T0 + offset + 120_000,
+  };
+}
+
+const fixtureFiles: FileEntry[] = SAMPLE_FILES.map((f, i) => ({
+  ...f,
+  ts: T0 + 300_000 + i * 1000,
+}));
+
+const base: PipelineState = {
+  phase: 'idle',
+  errorStage: null,
+  thread: [],
+  files: [],
+  selectedFile: null,
+  previewUrl: null,
+  score: null,
+  issues: [],
+  error: null,
+  threadId: 'fx-thread',
+  rightTab: 'preview',
+};
+
+const FIXTURES: Record<string, PipelineState> = {
+  idle: base,
+  researching: {
+    ...base,
+    phase: 'researching',
+    thread: [msg('researcher', RESEARCHER_TEXT.slice(0, 180), true, 0)],
+  },
+  awaiting: {
+    ...base,
+    phase: 'awaiting_approval',
+    thread: [msg('researcher', RESEARCHER_TEXT, false, 0), gate('awaiting', 60_000)],
+  },
+  building: {
+    ...base,
+    phase: 'engineering',
+    rightTab: 'code',
+    thread: [
+      msg('researcher', RESEARCHER_TEXT, false, 0),
+      gate('approved', 60_000),
+      msg('engineer', ENGINEER_TEXT, true, 200_000),
+    ],
+    files: fixtureFiles.slice(0, 2),
+    selectedFile: 'main.py',
+  },
+  deploying: {
+    ...base,
+    phase: 'deploying',
+    thread: [
+      msg('researcher', RESEARCHER_TEXT, false, 0),
+      gate('approved', 60_000),
+      msg('engineer', ENGINEER_TEXT, false, 200_000),
+      msg('system', DEPLOY_TEXT, false, 400_000),
+    ],
+    files: fixtureFiles,
+    selectedFile: 'main.py',
+  },
+  live: {
+    ...base,
+    phase: 'reviewing',
+    previewUrl: PREVIEW_URL,
+    thread: [
+      msg('researcher', RESEARCHER_TEXT, false, 0),
+      gate('approved', 60_000),
+      msg('engineer', ENGINEER_TEXT, false, 200_000),
+      msg('system', DEPLOY_TEXT, false, 400_000),
+      msg('reviewer', REVIEWER_TEXT.slice(0, 140), true, 500_000),
+    ],
+    files: fixtureFiles,
+    selectedFile: 'main.py',
+  },
+  done: {
+    ...base,
+    phase: 'done',
+    previewUrl: PREVIEW_URL,
+    score: 8,
+    issues: ['Empty todo titles are not rejected by the API.'],
+    thread: [
+      msg('researcher', RESEARCHER_TEXT, false, 0),
+      gate('approved', 60_000),
+      msg('engineer', ENGINEER_TEXT, false, 200_000),
+      msg('system', DEPLOY_TEXT, false, 400_000),
+      msg('reviewer', REVIEWER_TEXT, false, 500_000),
+    ],
+    files: fixtureFiles,
+    selectedFile: 'main.py',
+  },
+  error: {
+    ...base,
+    phase: 'error',
+    errorStage: 'engineer',
+    error: 'Sandbox boot failed — uvicorn exited with code 1.',
+    thread: [
+      msg('researcher', RESEARCHER_TEXT, false, 0),
+      gate('approved', 60_000),
+      msg('engineer', ENGINEER_TEXT, false, 200_000),
+      msg('system', 'Pipeline error — Sandbox boot failed — uvicorn exited with code 1.', false, 400_000),
+    ],
+    files: fixtureFiles.slice(0, 2),
+    selectedFile: 'main.py',
+  },
+};
+
+/** Resolve a `?state=` param to a fixture, or null if absent/unknown. */
+export function getFixture(name: string | null | undefined): PipelineState | null {
+  if (!name) return null;
+  return FIXTURES[name] ?? null;
+}
+
+// ── scripted mock stream ──────────────────────────────────────────────────
+type Step = { delay: number; ev: PipelineEvent };
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new DOMException('aborted', 'AbortError'));
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => {
+      clearTimeout(t);
+      reject(new DOMException('aborted', 'AbortError'));
+    });
+  });
+}
+
+async function play(steps: Step[], onEvent: (ev: PipelineEvent) => void, signal: AbortSignal) {
+  for (const step of steps) {
+    await sleep(step.delay, signal);
+    onEvent(step.ev);
+  }
+}
+
+function chunked(node: string, text: string, size = 4): Step[] {
+  const out: Step[] = [];
+  for (let i = 0; i < text.length; i += size) {
+    out.push({ delay: 18, ev: { type: 'chunk', node, text: text.slice(i, i + size) } });
+  }
+  return out;
+}
+
+export async function mockStart(
+  _idea: string,
+  onEvent: (ev: PipelineEvent) => void,
+  signal: AbortSignal,
+) {
+  await play(
+    [
+      { delay: 200, ev: { type: 'status', node: 'researcher' } },
+      ...chunked('researcher', RESEARCHER_TEXT),
+      { delay: 400, ev: { type: 'status', node: 'human_gate' } },
+      { delay: 200, ev: { type: 'interrupt', prd: SAMPLE_PRD } },
+    ],
+    onEvent,
+    signal,
+  );
+}
+
+export async function mockResume(onEvent: (ev: PipelineEvent) => void, signal: AbortSignal) {
+  await play(
+    [
+      { delay: 300, ev: { type: 'status', node: 'engineer' } },
+      ...chunked('engineer', ENGINEER_TEXT),
+      ...SAMPLE_FILES.map(
+        (f): Step => ({ delay: 500, ev: { type: 'file', path: f.path, content: f.content } }),
+      ),
+      { delay: 500, ev: { type: 'status', node: 'runner' } },
+      { delay: 200, ev: { type: 'deploy_status', message: DEPLOY_TEXT } },
+      { delay: 2500, ev: { type: 'preview', url: PREVIEW_URL } },
+      { delay: 400, ev: { type: 'status', node: 'reviewer' } },
+      ...chunked('reviewer', REVIEWER_TEXT),
+      { delay: 300, ev: { type: 'score', score: 8, issues: ['Empty titles are not rejected.'] } },
+      { delay: 400, ev: { type: 'done' } },
+    ],
+    onEvent,
+    signal,
+  );
+}

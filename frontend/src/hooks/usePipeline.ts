@@ -1,57 +1,190 @@
 import { useCallback, useRef, useState } from 'react';
+import type {
+  AgentId,
+  ChatMessage,
+  FileEntry,
+  GateItem,
+  Phase,
+  PipelineEvent,
+  PipelineState,
+  RightTab,
+  ThreadItem,
+} from '../lib/types';
+import { getFixture, mockResume, mockStart } from '../lib/demo';
 
-export type NodeName = 'researcher' | 'human_gate' | 'engineer' | 'reviewer';
-
-export type PipelineEvent =
-  | { type: 'status'; node: NodeName }
-  | { type: 'chunk'; node: NodeName; text: string }
-  | { type: 'interrupt'; prd: string }
-  | { type: 'score'; score: number; issues: string[] }
-  | { type: 'loop'; attempt: number }
-  | { type: 'done'; code: string; score: number; issues: string[]; attempts: number; elapsed: number }
-  | { type: 'error'; message: string };
-
-export type Phase =
-  | 'idle'
-  | 'researching'
-  | 'awaiting_approval'
-  | 'engineering'
-  | 'reviewing'
-  | 'done'
-  | 'error';
-
-export interface PipelineState {
-  phase: Phase;
-  activeNode: NodeName | null;
-  researcherText: string;
-  prd: string;
-  engineerText: string;
-  code: string;
-  score: number | null;
-  issues: string[];
-  attempts: number;
-  loopCount: number;
-  elapsed: number | null;
-  error: string | null;
-  threadId: string | null;
-}
+let seq = 0;
+const uid = (p: string) => `${p}-${Date.now().toString(36)}-${(seq++).toString(36)}`;
 
 const initialState: PipelineState = {
   phase: 'idle',
-  activeNode: null,
-  researcherText: '',
-  prd: '',
-  engineerText: '',
-  code: '',
+  errorStage: null,
+  thread: [],
+  files: [],
+  selectedFile: null,
+  previewUrl: null,
   score: null,
   issues: [],
-  attempts: 0,
-  loopCount: 0,
-  elapsed: null,
   error: null,
   threadId: null,
+  rightTab: 'preview',
 };
 
+/** Map a backend node name onto a chat agent identity. */
+function nodeToAgent(node: string): AgentId {
+  if (node === 'researcher' || node === 'engineer' || node === 'reviewer') return node;
+  return 'system';
+}
+
+function phaseForNode(node: string): Phase | null {
+  switch (node) {
+    case 'researcher':
+      return 'researching';
+    case 'engineer':
+      return 'engineering';
+    case 'runner':
+      return 'deploying';
+    case 'reviewer':
+      return 'reviewing';
+    default:
+      return null; // human_gate is driven by the `interrupt` event
+  }
+}
+
+function stageForPhase(phase: Phase): AgentId | 'gate' | null {
+  switch (phase) {
+    case 'researching':
+      return 'researcher';
+    case 'awaiting_approval':
+      return 'gate';
+    case 'engineering':
+    case 'deploying':
+      return 'engineer';
+    case 'reviewing':
+      return 'reviewer';
+    default:
+      return null;
+  }
+}
+
+/** Stop the blinking cursor on any in-flight message. */
+function finalizeStreaming(thread: ThreadItem[]): ThreadItem[] {
+  return thread.map((item) =>
+    item.kind === 'message' && item.streaming ? { ...item, streaming: false } : item,
+  );
+}
+
+/** Append a token to the current streaming message, or open a new one. */
+function appendChunk(thread: ThreadItem[], agent: AgentId, text: string): ThreadItem[] {
+  const last = thread[thread.length - 1];
+  if (last && last.kind === 'message' && last.agent === agent && last.streaming) {
+    return [...thread.slice(0, -1), { ...last, text: last.text + text }];
+  }
+  const msg: ChatMessage = {
+    id: uid('m'),
+    kind: 'message',
+    agent,
+    text,
+    ts: Date.now(),
+    streaming: true,
+  };
+  return [...thread, msg];
+}
+
+/** Post (or update the last) SYSTEM status message. */
+function pushOrUpdateSystem(thread: ThreadItem[], text: string): ThreadItem[] {
+  const last = thread[thread.length - 1];
+  if (last && last.kind === 'message' && last.agent === 'system' && !last.streaming) {
+    return [...thread.slice(0, -1), { ...last, text }];
+  }
+  const msg: ChatMessage = {
+    id: uid('m'),
+    kind: 'message',
+    agent: 'system',
+    text,
+    ts: Date.now(),
+    streaming: false,
+  };
+  return [...thread, msg];
+}
+
+/** Add or replace a generated file (dedup by path). */
+function upsertFile(files: FileEntry[], path: string, content: string): FileEntry[] {
+  const idx = files.findIndex((f) => f.path === path);
+  if (idx >= 0) {
+    const next = files.slice();
+    next[idx] = { path, content, ts: Date.now() };
+    return next;
+  }
+  return [...files, { path, content, ts: Date.now() }];
+}
+
+function reduce(s: PipelineState, ev: PipelineEvent): PipelineState {
+  switch (ev.type) {
+    case 'status': {
+      const phase = phaseForNode(ev.node);
+      return { ...s, thread: finalizeStreaming(s.thread), phase: phase ?? s.phase };
+    }
+    case 'chunk':
+      return { ...s, thread: appendChunk(s.thread, nodeToAgent(ev.node), ev.text) };
+    case 'interrupt': {
+      const gate: GateItem = {
+        id: uid('gate'),
+        kind: 'gate',
+        title: 'PRD Review',
+        description:
+          'The researcher has completed the PRD. Review it before the engineer begins building.',
+        prd: ev.prd,
+        state: 'awaiting',
+        ts: Date.now(),
+        decidedAt: null,
+      };
+      return { ...s, thread: [...finalizeStreaming(s.thread), gate], phase: 'awaiting_approval' };
+    }
+    case 'file': {
+      return {
+        ...s,
+        files: upsertFile(s.files, ev.path, ev.content),
+        selectedFile: ev.path,
+        rightTab: 'code',
+      };
+    }
+    case 'preview':
+      return { ...s, previewUrl: ev.url, rightTab: 'preview' };
+    case 'deploy_status': {
+      const text = ev.message ?? ev.status ?? 'Deploying to sandbox…';
+      return { ...s, phase: 'deploying', thread: pushOrUpdateSystem(s.thread, text) };
+    }
+    case 'score':
+      return { ...s, score: ev.score, issues: ev.issues ?? [] };
+    case 'done':
+      return { ...s, phase: 'done', thread: finalizeStreaming(s.thread) };
+    case 'error': {
+      const errMsg: ChatMessage = {
+        id: uid('m'),
+        kind: 'message',
+        agent: 'system',
+        text: `Pipeline error — ${ev.message}`,
+        ts: Date.now(),
+        streaming: false,
+      };
+      return {
+        ...s,
+        phase: 'error',
+        error: ev.message,
+        errorStage: stageForPhase(s.phase),
+        thread: [...finalizeStreaming(s.thread), errMsg],
+      };
+    }
+    default:
+      return s;
+  }
+}
+
+/**
+ * Consume a Server-Sent-Events stream. sse-starlette separates frames with
+ * CRLF (`\r\n\r\n`), so we match any spec-valid blank-line separator and keep
+ * raw bytes buffered in case a separator straddles a network-chunk boundary.
+ */
 async function consumeSSE(
   url: string,
   body: unknown,
@@ -64,16 +197,11 @@ async function consumeSSE(
     body: JSON.stringify(body),
     signal: abortSignal,
   });
-  if (!res.ok || !res.body) {
-    throw new Error(`HTTP ${res.status}`);
-  }
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
-  // sse-starlette (the backend) separates SSE frames with CRLF — a frame ends
-  // with \r\n\r\n, not \n\n. Match any spec-valid blank-line separator so the
-  // parser works regardless of line endings, and keep raw bytes buffered so a
-  // separator split across network chunk boundaries is still reassembled.
   const FRAME_SEP = /\r\n\r\n|\r\r|\n\n/;
   const LINE_SEP = /\r\n|\r|\n/;
   while (true) {
@@ -86,11 +214,10 @@ async function consumeSSE(
       buf = buf.slice(match.index + match[0].length);
       for (const line of frame.split(LINE_SEP)) {
         if (line.startsWith('data: ')) {
-          const payload = line.slice(6);
           try {
-            onEvent(JSON.parse(payload) as PipelineEvent);
+            onEvent(JSON.parse(line.slice(6)) as PipelineEvent);
           } catch {
-            // ignore malformed
+            // ignore malformed frame
           }
         }
       }
@@ -98,58 +225,17 @@ async function consumeSSE(
   }
 }
 
+const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+const MOCK = params?.has('mock') ?? false;
+const FIXTURE = getFixture(params?.get('state'));
+
 export function usePipeline() {
-  const [state, setState] = useState<PipelineState>(initialState);
+  const [state, setState] = useState<PipelineState>(FIXTURE ?? initialState);
   const abortRef = useRef<AbortController | null>(null);
-  const approveLockRef = useRef(false);
+  const decisionLock = useRef(false);
 
   const handleEvent = useCallback((ev: PipelineEvent) => {
-    setState((s) => {
-      switch (ev.type) {
-        case 'status': {
-          const phase: Phase =
-            ev.node === 'researcher'
-              ? 'researching'
-              : ev.node === 'human_gate'
-              ? s.prd
-                ? 'awaiting_approval'
-                : 'researching'
-              : ev.node === 'engineer'
-              ? 'engineering'
-              : 'reviewing';
-          return { ...s, activeNode: ev.node, phase };
-        }
-        case 'chunk':
-          if (ev.node === 'researcher') {
-            return { ...s, researcherText: s.researcherText + ev.text };
-          }
-          if (ev.node === 'engineer') {
-            return { ...s, engineerText: s.engineerText + ev.text };
-          }
-          return s;
-        case 'interrupt':
-          return { ...s, prd: ev.prd, phase: 'awaiting_approval', activeNode: 'human_gate' };
-        case 'score':
-          return { ...s, score: ev.score, issues: ev.issues };
-        case 'loop':
-          return { ...s, loopCount: s.loopCount + 1, engineerText: '' };
-        case 'done':
-          return {
-            ...s,
-            phase: 'done',
-            activeNode: null,
-            code: ev.code,
-            score: ev.score,
-            issues: ev.issues,
-            attempts: ev.attempts,
-            elapsed: ev.elapsed,
-          };
-        case 'error':
-          return { ...s, phase: 'error', error: ev.message, activeNode: null };
-        default:
-          return s;
-      }
-    });
+    setState((s) => reduce(s, ev));
   }, []);
 
   const start = useCallback(
@@ -157,16 +243,20 @@ export function usePipeline() {
       abortRef.current?.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-      approveLockRef.current = false;
+      decisionLock.current = false;
 
       const threadId = `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      setState({ ...initialState, phase: 'researching', activeNode: 'researcher', threadId });
+      setState({ ...initialState, phase: 'researching', threadId });
 
       try {
-        await consumeSSE('/pipeline/start', { idea, thread_id: threadId }, handleEvent, ctrl.signal);
+        if (MOCK) {
+          await mockStart(idea, handleEvent, ctrl.signal);
+        } else {
+          await consumeSSE('/pipeline/start', { idea, thread_id: threadId }, handleEvent, ctrl.signal);
+        }
       } catch (err) {
         if (!ctrl.signal.aborted) {
-          setState((s) => ({ ...s, phase: 'error', error: (err as Error).message }));
+          handleEvent({ type: 'error', message: (err as Error).message });
         }
       }
     },
@@ -174,28 +264,45 @@ export function usePipeline() {
   );
 
   const resume = useCallback(
-    async (decision: 'approve' | 'reject', feedback?: string) => {
-      if (approveLockRef.current) return;
-      approveLockRef.current = true;
-      const threadId = state.threadId;
-      if (!threadId) return;
+    async (gateId: string, decision: 'approve' | 'reject', feedback?: string) => {
+      if (decisionLock.current) return;
+      decisionLock.current = true;
+
+      // record the decision on the gate card immediately (optimistic UI)
+      setState((s) => ({
+        ...s,
+        phase: decision === 'approve' ? 'engineering' : 'idle',
+        thread: s.thread.map((item) =>
+          item.kind === 'gate' && item.id === gateId
+            ? { ...item, state: decision === 'approve' ? 'approved' : 'rejected', decidedAt: Date.now() }
+            : item,
+        ),
+      }));
+
+      if (decision === 'reject') {
+        decisionLock.current = false;
+        return;
+      }
 
       abortRef.current?.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-
-      setState((s) => ({ ...s, phase: 'engineering', activeNode: 'engineer', engineerText: '' }));
+      const threadId = state.threadId;
 
       try {
-        await consumeSSE(
-          '/pipeline/resume',
-          { thread_id: threadId, decision, feedback },
-          handleEvent,
-          ctrl.signal,
-        );
+        if (MOCK) {
+          await mockResume(handleEvent, ctrl.signal);
+        } else {
+          await consumeSSE(
+            '/pipeline/resume',
+            { thread_id: threadId, decision, feedback },
+            handleEvent,
+            ctrl.signal,
+          );
+        }
       } catch (err) {
         if (!ctrl.signal.aborted) {
-          setState((s) => ({ ...s, phase: 'error', error: (err as Error).message }));
+          handleEvent({ type: 'error', message: (err as Error).message });
         }
       }
     },
@@ -204,9 +311,17 @@ export function usePipeline() {
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
-    approveLockRef.current = false;
+    decisionLock.current = false;
     setState(initialState);
   }, []);
 
-  return { state, start, resume, reset };
+  const setRightTab = useCallback((tab: RightTab) => {
+    setState((s) => ({ ...s, rightTab: tab }));
+  }, []);
+
+  const selectFile = useCallback((path: string) => {
+    setState((s) => ({ ...s, selectedFile: path }));
+  }, []);
+
+  return { state, start, resume, reset, setRightTab, selectFile };
 }
