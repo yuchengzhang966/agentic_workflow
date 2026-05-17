@@ -21,7 +21,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 ZHIPU_BASE_URL = "https://api.z.ai/api/paas/v4"
-MODEL_NAME = "glm-4-plus"
+MODEL_NAME = "glm-5"
 
 RESEARCHER_PROMPT = (
     "You are a sharp product researcher. Given a product idea, write a structured PRD covering: "
