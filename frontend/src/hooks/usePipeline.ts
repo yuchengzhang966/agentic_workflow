@@ -22,6 +22,7 @@ const initialState: PipelineState = {
   files: [],
   selectedFile: null,
   previewUrl: null,
+  previewExpired: false,
   score: null,
   issues: [],
   error: null,
@@ -152,7 +153,7 @@ function reduce(s: PipelineState, ev: PipelineEvent): PipelineState {
       };
     }
     case 'preview':
-      return { ...s, previewUrl: ev.url, rightTab: 'preview' };
+      return { ...s, previewUrl: ev.url, previewExpired: false, rightTab: 'preview' };
     case 'deploy_status': {
       const text = ev.message ?? ev.status ?? 'Deploying to sandbox…';
       return { ...s, phase: 'deploying', thread: pushOrUpdateSystem(s.thread, text) };
@@ -241,7 +242,13 @@ function loadPersisted(): PipelineState | null {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const saved = JSON.parse(raw) as PipelineState;
-    return { ...saved, thread: finalizeStreaming(saved.thread) };
+    return {
+      ...saved,
+      thread: finalizeStreaming(saved.thread),
+      // a restored preview points at an ephemeral sandbox that has almost
+      // certainly been torn down — flag it so the UI says so honestly
+      previewExpired: !!saved.previewUrl,
+    };
   } catch {
     return null;
   }

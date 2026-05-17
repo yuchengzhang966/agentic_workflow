@@ -158,6 +158,7 @@ const base: PipelineState = {
   files: [],
   selectedFile: null,
   previewUrl: null,
+  previewExpired: false,
   score: null,
   issues: [],
   error: null,

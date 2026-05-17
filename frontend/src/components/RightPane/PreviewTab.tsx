@@ -6,21 +6,27 @@ import { AlertIcon, BracketsIcon, LoaderIcon } from '../icons';
 interface Props {
   phase: Phase;
   previewUrl: string | null;
+  previewExpired: boolean;
   error: string | null;
   onReset: () => void;
 }
 
-type PreviewState = 'idle' | 'deploying' | 'live' | 'error';
+type PreviewState = 'idle' | 'deploying' | 'live' | 'error' | 'expired';
 
-function resolveState(phase: Phase, previewUrl: string | null): PreviewState {
+function resolveState(
+  phase: Phase,
+  previewUrl: string | null,
+  previewExpired: boolean,
+): PreviewState {
   if (phase === 'error') return 'error';
+  if (previewExpired) return 'expired';
   if (previewUrl) return 'live';
   if (phase === 'deploying') return 'deploying';
   return 'idle';
 }
 
-export function PreviewTab({ phase, previewUrl, error, onReset }: Props) {
-  const view = resolveState(phase, previewUrl);
+export function PreviewTab({ phase, previewUrl, previewExpired, error, onReset }: Props) {
+  const view = resolveState(phase, previewUrl, previewExpired);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -29,7 +35,7 @@ export function PreviewTab({ phase, previewUrl, error, onReset }: Props) {
 
   return (
     <div className="tab-content">
-      <BrowserChrome url={previewUrl} />
+      <BrowserChrome url={view === 'expired' ? null : previewUrl} />
       <div className={`preview ${view === 'error' ? 'preview__placeholder--error' : ''}`}>
         {view === 'live' && previewUrl && (
           <iframe
@@ -53,6 +59,21 @@ export function PreviewTab({ phase, previewUrl, error, onReset }: Props) {
             <LoaderIcon size={32} color="var(--accent-amber)" className="spinner" />
             <span className="preview__ph-label">Deploying your app…</span>
             <span className="preview__ph-sublabel">pip install + uvicorn starting</span>
+          </div>
+        )}
+
+        {view === 'expired' && (
+          <div className="preview__placeholder">
+            <BracketsIcon size={48} color="var(--text-muted)" />
+            <span className="preview__ph-label">Preview sandbox closed</span>
+            <span className="preview__ph-sublabel">
+              Live previews run in a temporary sandbox that shuts down after
+              ~10 minutes. Your generated code is saved in the Code tab — press
+              Reset to build and preview again.
+            </span>
+            <button className="ghost-btn" onClick={onReset}>
+              Reset
+            </button>
           </div>
         )}
 

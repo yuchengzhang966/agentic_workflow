@@ -887,7 +887,9 @@ body.resizing {
 }
 .preview__ph-sublabel {
   font-size: 12px;
+  line-height: 1.6;
   color: var(--text-muted);
+  max-width: 380px;
 }
 .preview__error-msg {
   font-size: 14px;

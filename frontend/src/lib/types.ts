@@ -51,6 +51,9 @@ export interface PipelineState {
   files: FileEntry[];
   selectedFile: string | null;
   previewUrl: string | null;
+  /** true when previewUrl points at a sandbox that has likely been torn down
+   * (e.g. a session restored from localStorage after the ~10-min timeout) */
+  previewExpired: boolean;
   score: number | null;
   issues: string[];
   error: string | null;
