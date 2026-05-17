@@ -1,6 +1,6 @@
 /** Shared types for the workspace pipeline state. */
 
-export type AgentId = 'researcher' | 'engineer' | 'reviewer' | 'system';
+export type AgentId = 'user' | 'researcher' | 'engineer' | 'reviewer' | 'system';
 
 export type Phase =
   | 'idle'

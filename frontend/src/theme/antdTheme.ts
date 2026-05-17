@@ -1,21 +1,21 @@
 import { theme, type ThemeConfig } from 'antd';
 
-/** antd token overrides — maps the design-spec palette onto antd's dark algorithm. */
+/** antd token overrides — light theme, matched to the index.css palette. */
 export const antdTheme: ThemeConfig = {
-  algorithm: theme.darkAlgorithm,
+  algorithm: theme.defaultAlgorithm,
   token: {
-    colorBgBase: '#0D1117',
-    colorBgContainer: '#161B22',
-    colorBgElevated: '#21262D',
-    colorBorder: '#30363D',
-    colorBorderSecondary: '#21262D',
-    colorText: '#E6EDF3',
-    colorTextSecondary: '#8B949E',
-    colorTextTertiary: '#6E7681',
-    colorPrimary: '#388BFD',
-    colorSuccess: '#3FB950',
-    colorWarning: '#D29922',
-    colorError: '#F85149',
+    colorBgBase: '#ffffff',
+    colorBgContainer: '#ffffff',
+    colorBgElevated: '#ffffff',
+    colorBorder: '#d1d9e0',
+    colorBorderSecondary: '#e4e8ec',
+    colorText: '#1f2328',
+    colorTextSecondary: '#59636e',
+    colorTextTertiary: '#818b98',
+    colorPrimary: '#0969da',
+    colorSuccess: '#1a7f37',
+    colorWarning: '#9a6700',
+    colorError: '#cf222e',
     borderRadius: 6,
     fontFamily:
       "'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -24,12 +24,12 @@ export const antdTheme: ThemeConfig = {
   },
   components: {
     Input: {
-      colorBgContainer: '#21262D',
-      activeBorderColor: '#388BFD',
-      hoverBorderColor: '#388BFD',
+      colorBgContainer: '#ffffff',
+      activeBorderColor: '#0969da',
+      hoverBorderColor: '#0969da',
     },
     Button: {
-      defaultBg: '#21262D',
+      defaultBg: '#f6f8fa',
     },
   },
 };

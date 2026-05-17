@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   AgentId,
   ChatMessage,
@@ -28,6 +28,9 @@ const initialState: PipelineState = {
   threadId: null,
   rightTab: 'preview',
 };
+
+/** localStorage key for the persisted workspace — survives a browser refresh. */
+const STORAGE_KEY = 'atoms-pipeline-state';
 
 /** Map a backend node name onto a chat agent identity. */
 function nodeToAgent(node: string): AgentId {
@@ -229,10 +232,41 @@ const params = typeof window !== 'undefined' ? new URLSearchParams(window.locati
 const MOCK = params?.has('mock') ?? false;
 const FIXTURE = getFixture(params?.get('state'));
 
+/** Restore the workspace saved before a refresh. Any run that was streaming
+ * when the page reloaded is no longer live, so its blinking cursors are
+ * finalized — the generated code, PRD and preview are what we want back. */
+function loadPersisted(): PipelineState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw) as PipelineState;
+    return { ...saved, thread: finalizeStreaming(saved.thread) };
+  } catch {
+    return null;
+  }
+}
+
 export function usePipeline() {
-  const [state, setState] = useState<PipelineState>(FIXTURE ?? initialState);
+  const [state, setState] = useState<PipelineState>(
+    FIXTURE ?? (MOCK ? initialState : loadPersisted() ?? initialState),
+  );
   const abortRef = useRef<AbortController | null>(null);
   const decisionLock = useRef(false);
+
+  // Persist the workspace so a browser refresh restores it. Debounced so a
+  // burst of streaming tokens doesn't thrash localStorage.
+  useEffect(() => {
+    if (MOCK || FIXTURE) return;
+    const id = setTimeout(() => {
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch {
+        // storage full or unavailable — non-fatal
+      }
+    }, 400);
+    return () => clearTimeout(id);
+  }, [state]);
 
   const handleEvent = useCallback((ev: PipelineEvent) => {
     setState((s) => reduce(s, ev));
@@ -246,7 +280,15 @@ export function usePipeline() {
       decisionLock.current = false;
 
       const threadId = `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      setState({ ...initialState, phase: 'researching', threadId });
+      const userMsg: ChatMessage = {
+        id: uid('m'),
+        kind: 'message',
+        agent: 'user',
+        text: idea,
+        ts: Date.now(),
+        streaming: false,
+      };
+      setState({ ...initialState, phase: 'researching', threadId, thread: [userMsg] });
 
       try {
         if (MOCK) {
@@ -312,6 +354,11 @@ export function usePipeline() {
   const reset = useCallback(() => {
     abortRef.current?.abort();
     decisionLock.current = false;
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // ignore
+    }
     setState(initialState);
   }, []);
 

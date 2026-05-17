@@ -10,6 +10,7 @@ interface Identity {
 }
 
 const IDENTITY: Record<AgentId, Identity> = {
+  user: { label: 'YOU', color: 'var(--accent-blue)', initial: 'U' },
   researcher: { label: 'RESEARCHER', color: 'var(--accent-purple)', initial: 'R' },
   engineer: { label: 'ENGINEER', color: 'var(--accent-cyan)', initial: 'E' },
   reviewer: { label: 'REVIEWER', color: 'var(--accent-orange)', initial: 'V' },
