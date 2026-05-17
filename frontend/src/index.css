@@ -455,6 +455,33 @@ body.resizing {
   color: var(--text-secondary);
   margin-bottom: 12px;
 }
+.gate__quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.gate__chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.gate__chip:hover {
+  border-color: var(--accent-blue);
+  color: var(--text-primary);
+}
+.gate__chip--active {
+  border-color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 12%, transparent);
+  color: var(--accent-blue);
+}
 .gate__actions {
   display: flex;
   gap: 8px;
@@ -470,6 +497,7 @@ body.resizing {
   font-family: var(--font-sans);
   font-size: 14px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 120ms ease, border-color 120ms ease;
 }
@@ -774,7 +802,6 @@ body.resizing {
 }
 .filerow--dir {
   color: var(--text-secondary);
-  cursor: default;
 }
 .filerow--file {
   color: var(--text-primary);

@@ -7,6 +7,14 @@ function formatTime(ts: number): string {
   return new Date(ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 
+/** Common PRD-revision asks — one click fills the feedback box. */
+const QUICK_FEEDBACK = [
+  'Scope is too broad — simplify it',
+  'Needs more detail on the core feature',
+  'Wrong target user',
+  'Focus on fewer features',
+];
+
 interface Props {
   gate: GateItem;
   onDecision: (gateId: string, decision: 'approve' | 'reject', feedback?: string) => void;
@@ -35,10 +43,22 @@ export function HumanGate({ gate, onDecision }: Props) {
 
           {awaiting ? (
             <>
+              <div className="gate__quick">
+                {QUICK_FEEDBACK.map((q) => (
+                  <button
+                    key={q}
+                    type="button"
+                    className={`gate__chip ${feedback === q ? 'gate__chip--active' : ''}`}
+                    onClick={() => setFeedback(feedback === q ? '' : q)}
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
               <Input.TextArea
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
-                placeholder="Optional feedback…"
+                placeholder="Pick an option above, or write your own feedback…"
                 autoSize={{ minRows: 2, maxRows: 5 }}
                 style={{ background: 'var(--bg-base)' }}
               />

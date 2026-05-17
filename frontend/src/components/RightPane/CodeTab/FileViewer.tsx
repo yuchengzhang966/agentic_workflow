@@ -1,57 +1,9 @@
 import type { FileEntry } from '../../../lib/types';
+import { tokenizeLine } from '../../../lib/highlight';
 
 interface Props {
   file: FileEntry | null;
 }
-
-const KEYWORDS = [
-  'import',
-  'from',
-  'as',
-  'def',
-  'class',
-  'return',
-  'if',
-  'else',
-  'elif',
-  'for',
-  'in',
-  'while',
-  'try',
-  'except',
-  'finally',
-  'with',
-  'async',
-  'await',
-  'lambda',
-  'yield',
-  'pass',
-  'break',
-  'continue',
-  'raise',
-  'True',
-  'False',
-  'None',
-  'and',
-  'or',
-  'not',
-  'is',
-  'in',
-  'self',
-  'super',
-  'global',
-  'nonlocal',
-  'assert',
-  'del',
-  'type',
-  'interface',
-  'const',
-  'let',
-  'var',
-  'function',
-  'export',
-  'default',
-];
 
 export function FileViewer({ file }: Props) {
   if (!file) {
@@ -73,32 +25,17 @@ export function FileViewer({ file }: Props) {
         {lines.map((line, i) => (
           <div key={i} className="codeline">
             <span className="codeline__num">{i + 1}</span>
-            <span className="codeline__code" dangerouslySetInnerHTML={{ __html: highlightLine(line) }} />
+            <span className="codeline__code">
+              {tokenizeLine(line).map((t, j) => (
+                <span key={j} className={t.cls}>
+                  {t.text}
+                </span>
+              ))}
+              {line === '' ? '​' : ''}
+            </span>
           </div>
         ))}
       </div>
     </div>
   );
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function highlightLine(line: string): string {
-  const escaped = escapeHtml(line);
-  // Highlight keywords
-  const keywordRegex = new RegExp(`\\b(${KEYWORDS.join('|')})\\b`, 'g');
-  const withKeywords = escaped.replace(keywordRegex, '<span class="tok-kw">$1</span>');
-  // Highlight strings
-  const withStrings = withKeywords.replace(
-    /(["'])(?:(?=(\\?))\2.)*?\1/g,
-    '<span class="tok-str">$&</span>',
-  );
-  // Highlight comments (Python-style and JS-style)
-  const withComments = withStrings.replace(/(#.*$|\/\/.*$)/gm, '<span class="tok-cm">$1</span>');
-  return withComments;
 }
