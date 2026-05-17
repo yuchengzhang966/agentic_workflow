@@ -1,0 +1,37 @@
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f5f7fb;
+}
+
+pre.stream-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  background: #1e1e2e;
+  color: #cdd6f4;
+  padding: 12px;
+  border-radius: 6px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+pre.prd-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+  background: #fafafa;
+  color: #1f2937;
+  padding: 14px;
+  border-radius: 6px;
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+}

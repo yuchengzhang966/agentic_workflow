@@ -1,54 +1,56 @@
-# Atoms Demo
+# Atoms Demo — Multi-Agent Pipeline
 
-Generate any web app from a text description. Watch it come to life in real time.
+A streaming multi-agent product pipeline:
+**Researcher → Human Gate → Engineer ↔ Reviewer** (loops if review score < 8, max 2 attempts).
 
-**Live demo:** https://atoms-demo.vercel.app  
-**Source:** https://github.com/your-username/atoms-demo
+Backend is FastAPI + LangGraph (with a `MemorySaver` checkpointer and an
+`interrupt()`-based human gate). Frontend is Vite + React 18 + antd, consuming
+Server-Sent Events.
 
-## What it does
+## Stack
 
-1. **Generate** — type a description, Claude streams a self-contained HTML app live
-2. **Preview** — rendered immediately in a sandboxed iframe
-3. **Refine** — iterate on the app with follow-up prompts (version history saved)
-4. **Share** — every app gets a persistent URL
-5. **Remix** — fork any app and start from there
-6. **Edit** — direct code editing with save
+| Part      | Tech                                          |
+|-----------|-----------------------------------------------|
+| Backend   | FastAPI, LangGraph, langchain-openai, SSE     |
+| Frontend  | Vite, React 18, antd, TypeScript              |
+| Model     | GLM-4-plus via the Z.ai OpenAI-compatible API |
 
-## Tech stack
+## Run locally
 
-- **Next.js 14** (App Router) + TypeScript
-- **Anthropic Claude** (claude-haiku-4-5) — streaming generation
-- **SQLite** (better-sqlite3) — zero-infrastructure persistence
-- **Tailwind CSS** — styling
-- **Vercel** — deployment
-
-## Local setup
+### Backend (port 8000)
 
 ```bash
-cp .env.example .env
-# Add your ANTHROPIC_API_KEY to .env
+cd backend
+python3 -m venv .venv            # if .venv does not exist
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env             # then fill in ZHIPU_API
+.venv/bin/uvicorn main:app --port 8000
+```
 
+`GET /health` → `{"ok": true}`
+
+### Frontend (port 5173)
+
+```bash
+cd frontend
 npm install
 npm run dev
-# open http://localhost:3000
 ```
 
-## Architecture
+Vite proxies `/pipeline/*` to `http://localhost:8000`, so start the backend first.
+For a production build: `npm run build` (output in `dist/`).
 
-```
-/src
-  /app
-    /api
-      /stream        → SSE streaming from Claude
-      /apps          → CRUD for saved apps
-      /apps/[id]     → single app + version history
-    /create          → live generation page
-    /app/[id]        → share/view page with refine + edit
-  /lib
-    db.ts            → SQLite access layer
-    claude.ts        → Anthropic client
-  /components
-    AppCard.tsx      → gallery thumbnail
-```
+## API
 
-SQLite schema: `apps` table (id, title, prompt, html, timestamps, remix_of) + `iterations` table for version history. Auto-created on first run.
+| Endpoint           | Body                                          | Streams                                    |
+|--------------------|-----------------------------------------------|---------------------------------------------|
+| `POST /pipeline/start`  | `{idea, thread_id}`                      | researcher chunks → `interrupt` (PRD)       |
+| `POST /pipeline/resume` | `{thread_id, decision, feedback?}`       | engineer chunks → `score` → `done` (code)   |
+| `GET /health`           | —                                        | `{"ok": true}`                              |
+
+SSE event types: `status`, `chunk`, `interrupt`, `score`, `loop`, `done`, `error`.
+
+## Environment
+
+Only `ZHIPU_API` is required (see `backend/.env.example`). No other external
+accounts are needed for dev.
