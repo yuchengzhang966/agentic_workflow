@@ -1,4 +1,4 @@
-import { type Phase, type FileEntry, type RightTab, type PipelineState } from '../../lib/types';
+import { type RightTab, type PipelineState } from '../../lib/types';
 import { PreviewTab } from './PreviewTab';
 import { CodeTab } from './CodeTab';
 
@@ -6,9 +6,10 @@ interface Props {
   state: PipelineState;
   onReset: () => void;
   onTabChange: (tab: RightTab) => void;
+  onFileSelect: (path: string) => void;
 }
 
-export function RightPane({ state, onReset, onTabChange }: Props) {
+export function RightPane({ state, onReset, onTabChange, onFileSelect }: Props) {
   const { phase, previewUrl, error, files, selectedFile, rightTab } = state;
 
   return (
@@ -34,7 +35,7 @@ export function RightPane({ state, onReset, onTabChange }: Props) {
         {rightTab === 'preview' ? (
           <PreviewTab phase={phase} previewUrl={previewUrl} error={error} onReset={onReset} />
         ) : (
-          <CodeTab files={files} selectedFile={selectedFile} />
+          <CodeTab files={files} selectedFile={selectedFile} onFileSelect={onFileSelect} />
         )}
       </div>
     </section>
