@@ -27,7 +27,7 @@ from langgraph.types import Command, interrupt
 import runner
 
 ZHIPU_BASE_URL = "https://api.z.ai/api/paas/v4"
-MODEL_NAME = "glm-5.1"
+MODEL_NAME = "glm-4.5-flash"
 
 RESEARCHER_PROMPT = (
     "You are a sharp product researcher. Given a product idea, write a structured PRD covering: "
@@ -170,6 +170,9 @@ def _make_model(max_tokens: int) -> ChatOpenAI:
         max_tokens=max_tokens,
         api_key=os.environ["ZHIPU_API"],
         base_url=ZHIPU_BASE_URL,
+        # glm-4.5-flash is a reasoning model — disable thinking so the token
+        # budget goes to real output, not reasoning_content.
+        extra_body={"thinking": {"type": "disabled"}},
     )
 
 

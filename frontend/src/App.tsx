@@ -20,12 +20,7 @@ export default function App() {
       />
       <div className="app-body">
         <LeftPane state={state} onStart={start} onDecision={resume} onReset={reset} />
-        <RightPane
-          state={state}
-          onReset={reset}
-          onTabChange={setRightTab}
-          onFileSelect={selectFile}
-        />
+        <RightPane state={state} onReset={reset} onFileSelect={selectFile} />
       </div>
     </div>
   );
