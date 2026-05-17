@@ -15,12 +15,13 @@ import asyncio
 import json
 import os
 import re
+import sqlite3
 import threading
 from typing import AsyncIterator, Optional, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
@@ -144,7 +145,17 @@ class Bus:
 
 # Module-level singletons — Python's import cache makes these process-wide
 # within one uvicorn worker, so /pipeline/start and /pipeline/resume share state.
-_checkpointer = MemorySaver()
+#
+# Durable checkpointer: pipeline state (per thread_id) is persisted to a local
+# SQLite file, so an interrupted run survives a process restart and can resume.
+# check_same_thread=False because the graph runs in a worker thread; SqliteSaver
+# serializes access internally.
+_DB_PATH = os.environ.get(
+    "CHECKPOINT_DB",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "checkpoints.db"),
+)
+_checkpointer = SqliteSaver(sqlite3.connect(_DB_PATH, check_same_thread=False))
+_checkpointer.setup()
 _bus_registry: dict[str, Bus] = {}
 _registry_lock = threading.Lock()
 

@@ -3,6 +3,10 @@
 __pycache__/
 *.pyc
 
+# Local SQLite checkpoint store (runtime state — not source)
+*.db
+checkpoints.db
+
 # Node / Vite
 node_modules/
 dist/
