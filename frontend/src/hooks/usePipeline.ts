@@ -70,15 +70,21 @@ async function consumeSSE(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
+  // sse-starlette (the backend) separates SSE frames with CRLF — a frame ends
+  // with \r\n\r\n, not \n\n. Match any spec-valid blank-line separator so the
+  // parser works regardless of line endings, and keep raw bytes buffered so a
+  // separator split across network chunk boundaries is still reassembled.
+  const FRAME_SEP = /\r\n\r\n|\r\r|\n\n/;
+  const LINE_SEP = /\r\n|\r|\n/;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buf += decoder.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buf.indexOf('\n\n')) !== -1) {
-      const frame = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
-      for (const line of frame.split('\n')) {
+    let match: RegExpExecArray | null;
+    while ((match = FRAME_SEP.exec(buf)) !== null) {
+      const frame = buf.slice(0, match.index);
+      buf = buf.slice(match.index + match[0].length);
+      for (const line of frame.split(LINE_SEP)) {
         if (line.startsWith('data: ')) {
           const payload = line.slice(6);
           try {
