@@ -3,6 +3,7 @@ import { usePipeline } from './hooks/usePipeline';
 import { AppHeader } from './components/AppHeader';
 import { LeftPane } from './components/LeftPane';
 import { RightPane } from './components/RightPane';
+import { Onboarding } from './components/Onboarding';
 
 const MIN_LEFT = 280;
 const MAX_LEFT = 680;
@@ -29,6 +30,11 @@ export default function App() {
     document.addEventListener('mouseup', onUp);
     document.body.classList.add('resizing');
   }, []);
+
+  // First run: full-screen onboarding prompt until the first idea is submitted.
+  if (state.phase === 'idle' && state.thread.length === 0) {
+    return <Onboarding onStart={start} />;
+  }
 
   return (
     <div className="app">
