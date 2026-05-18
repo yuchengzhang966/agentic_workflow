@@ -937,14 +937,25 @@ body.resizing {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 32px;
-  padding: 0 16px;
+  width: 100%;
+  height: 28px;
+  padding: 0 12px;
+  margin: 0;
+  font-family: inherit;
   font-size: 12px;
+  text-align: left;
   cursor: pointer;
+  appearance: none;
+  background: none;
+  border: none;
   border-left: 2px solid transparent;
-  transition: background 100ms ease;
+  transition: background 120ms ease;
   white-space: nowrap;
   overflow: hidden;
+}
+.filerow:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: -2px;
 }
 .filerow:hover {
   background: var(--bg-elevated);
@@ -953,11 +964,12 @@ body.resizing {
   color: var(--text-secondary);
 }
 .filerow--file {
-  color: var(--text-primary);
+  color: var(--text-secondary);
 }
 .filerow--selected {
   background: var(--bg-elevated);
   border-left-color: var(--accent-blue);
+  color: var(--text-primary);
   font-weight: 500;
 }
 .filerow--new {
@@ -966,6 +978,14 @@ body.resizing {
 .filerow__name {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filerow__chevron {
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+}
+.filerow__chevron--open {
+  transform: rotate(90deg);
 }
 
 .fileviewer {

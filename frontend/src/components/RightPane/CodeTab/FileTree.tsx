@@ -1,5 +1,10 @@
 import { useState, type ReactNode } from 'react';
-import { FileIcon, FolderIcon, ChevronDownIcon, ChevronRightIcon } from '../../icons';
+import {
+  CaretRightOutlined,
+  FileOutlined,
+  FolderOpenOutlined,
+  FolderOutlined,
+} from '@ant-design/icons';
 import type { FileEntry } from '../../../lib/types';
 
 interface Props {
@@ -52,10 +57,8 @@ export function FileTree({ files, selectedFile, onFileSelect }: Props) {
     return (
       <nav className="filetree" aria-label="Generated files">
         <div className="filetree__empty">
-          <FileIcon
-            size={24}
-            color="var(--text-muted)"
-            style={{ display: 'block', margin: '0 auto 12px' }}
+          <FileOutlined
+            style={{ fontSize: 24, color: 'var(--text-muted)', display: 'block', margin: '0 auto 12px' }}
           />
           No files generated yet
         </div>
@@ -72,24 +75,25 @@ export function FileTree({ files, selectedFile, onFileSelect }: Props) {
     });
 
   const renderNode = (node: TreeNode, depth: number): ReactNode => {
-    const pad = { paddingLeft: 10 + depth * 14 };
-
     if (node.isDir) {
       const open = !collapsed.has(node.path);
       return (
         <div key={node.path}>
           <button
             className="filerow filerow--dir"
-            style={pad}
+            style={{ paddingLeft: 8 + depth * 14 }}
             onClick={() => toggle(node.path)}
             aria-expanded={open}
           >
+            <CaretRightOutlined
+              className={`filerow__chevron${open ? ' filerow__chevron--open' : ''}`}
+              style={{ fontSize: 11, color: 'var(--text-muted)' }}
+            />
             {open ? (
-              <ChevronDownIcon size={12} color="var(--text-muted)" />
+              <FolderOpenOutlined style={{ fontSize: 14, color: 'var(--accent-blue)' }} />
             ) : (
-              <ChevronRightIcon size={12} color="var(--text-muted)" />
+              <FolderOutlined style={{ fontSize: 14, color: 'var(--accent-blue)' }} />
             )}
-            <FolderIcon size={14} color="var(--accent-blue)" />
             <span className="filerow__name">{node.name}</span>
           </button>
           {open && node.children.map((c) => renderNode(c, depth + 1))}
@@ -101,12 +105,12 @@ export function FileTree({ files, selectedFile, onFileSelect }: Props) {
       <button
         key={node.path}
         className={`filerow filerow--file ${selectedFile === node.path ? 'filerow--selected' : ''}`}
-        style={pad}
+        style={{ paddingLeft: 12 + depth * 14 }}
         onClick={() => onFileSelect(node.path)}
         aria-selected={selectedFile === node.path}
         title={node.path}
       >
-        <FileIcon size={14} color="var(--text-muted)" />
+        <FileOutlined style={{ fontSize: 13, color: 'var(--text-muted)' }} />
         <span className="filerow__name">{node.name}</span>
       </button>
     );
